@@ -3,9 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node --loader ts-node/esm index.ts",
     "build": "tsc",
-    "dev": "nodemon --exec ts-node-esm index.ts"
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@bgd-labs/aave-address-book": "^3.0.0",
