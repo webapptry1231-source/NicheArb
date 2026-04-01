@@ -1,25 +1,26 @@
 {
   "name": "flashloan-arb-scanner",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Aave Flashloan Arbitrage Scanner across multiple chains",
+  "main": "dist/index.js",
+  "type": "commonjs",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "dev": "ts-node index.ts"
   },
   "dependencies": {
-    "@bgd-labs/aave-address-book": "^3.0.0",
-    "axios": "^1.4.0",
-    "dotenv": "^16.0.3",
-    "pg": "^8.11.0",
-    "pino": "^8.15.0",
-    "pino-pretty": "^10.2.0",
-    "viem": "^2.0.0"
+    "@bgd-labs/aave-address-book": "^4.48.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/pg": "^8.10.0",
-    "nodemon": "^2.0.22",
-    "ts-node": "^10.9.1",
-    "typescript": "^5.0.0"
+    "@types/node": "^22.7.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.2"
   }
 }
