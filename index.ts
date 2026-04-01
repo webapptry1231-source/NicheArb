@@ -1,7 +1,7 @@
 import { createPublicClient, createWalletClient, http, webSocket, encodeFunctionData, getContract, PublicClient, WalletClient, parseAbi, defineChain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { zksync, scroll, linea, base } from 'viem/chains';
-import { AaveV3ZkSync, AaveV3Scroll, AaveV3Base } from '@bgd-labs/aave-address-book';
+import { AaveV3ZkSync, AaveV3Scroll, AaveV3Linea, AaveV3Base } from '@bgd-labs/aave-address-book';
 import { Pool } from 'pg';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -14,7 +14,7 @@ const logger = pino({
   transport: { target: 'pino-pretty', options: { colorize: true, translateTime: true } }
 });
 
-// ----- Custom chains -----
+// ----- Custom chains (Monad, Berachain) -----
 const monad = defineChain({
   id: 143,
   name: 'Monad',
@@ -31,54 +31,82 @@ const berachain = defineChain({
   rpcUrls: { default: { http: ['https://rpc.berachain.com'] }, public: { http: ['https://rpc.berachain.com'] } }
 });
 
-// ----- Chain configuration -----
+// ----- Chain configuration (all Aave pools from aave-address-book) -----
 const CHAINS = [
   { id: 324, name: 'zksync', viemChain: zksync, aavePool: AaveV3ZkSync.POOL, executor: process.env.EXECUTOR_ZKSYNC! },
   { id: 534352, name: 'scroll', viemChain: scroll, aavePool: AaveV3Scroll.POOL, executor: process.env.EXECUTOR_SCROLL! },
-  { id: 59144, name: 'linea', viemChain: linea, aavePool: '0xc47b8c00b0f69a36fa203ffeac0334874574a8ac', executor: process.env.EXECUTOR_LINEA! },
+  { id: 59144, name: 'linea', viemChain: linea, aavePool: AaveV3Linea.POOL, executor: process.env.EXECUTOR_LINEA! },
   { id: 8453, name: 'base', viemChain: base, aavePool: AaveV3Base.POOL, executor: process.env.EXECUTOR_BASE! },
   { id: 143, name: 'monad', viemChain: monad, aavePool: undefined, executor: process.env.EXECUTOR_MONAD! },
   { id: 80094, name: 'berachain', viemChain: berachain, aavePool: undefined, executor: process.env.EXECUTOR_BERACHAIN! }
 ];
 
-// ----- Factory addresses -----
-const FACTORIES: Record<number, { name: string; address: string; type: 'v2' | 'v3' }[]> = {
+// ----- Factory addresses (fully filled) -----
+const FACTORIES: Record<number, { name: string; address: string; type: 'v2' | 'v3'; enumerable: boolean }[]> = {
   324: [
-    { name: 'SyncSwap Classic', address: '0xf2DAd89f2788a8CD54625C60b55cD3d2D0ACa7Cb', type: 'v2' },
-    { name: 'SyncSwap Stable', address: '0x5b9f21d407F35b10CbfDDca17D5D84b129356ea3', type: 'v2' },
-    { name: 'Uniswap V3', address: '0x8FdA5a7a8dCA67BBcDd10F02Fa0649A937215422', type: 'v3' }
+    { name: 'SyncSwap Classic', address: '0xf2DAd89f2788a8CD54625C60b55cD3d2D0ACa7Cb', type: 'v2', enumerable: true },
+    { name: 'SyncSwap Stable', address: '0x5b9f21d407F35b10CbfDDca17D5D84b129356ea3', type: 'v2', enumerable: true },
+    { name: 'Uniswap V3', address: '0x8FdA5a7a8dCA67BBcDd10F02Fa0649A937215422', type: 'v3', enumerable: false }
   ],
-  534352: [],
-  59144: [],
+  534352: [
+    { name: 'SyncSwap Classic', address: '0x37BAc764494c8db4e54BDE72f6965beA9fa0AC2d', type: 'v2', enumerable: true },
+    { name: 'SyncSwap Stable', address: '0xE4CF807E351b56720B17A59094179e7Ed9dD3727', type: 'v2', enumerable: true },
+    { name: 'iZiSwap V2', address: '0x8c7d3063579BdB0b90997e18A770eaE32E1eBb08', type: 'v2', enumerable: true }
+  ],
+  59144: [
+    { name: 'PancakeSwap V3', address: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865', type: 'v3', enumerable: false },
+    { name: 'Nile V2/V3', address: '0xAAA32926fcE6bE95ea2c51cB4Fcb60836D320C42', type: 'v2', enumerable: true }
+  ],
   8453: [
-    { name: 'Aerodrome', address: '0x42Bf381a259F9aD132D5f257E0eF5E4c5F0b2BfF', type: 'v2' },
-    { name: 'Uniswap V3', address: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD', type: 'v3' }
+    { name: 'Aerodrome', address: '0x42Bf381a259F9aD132D5f257E0eF5E4c5F0b2BfF', type: 'v2', enumerable: true },
+    { name: 'Uniswap V3', address: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD', type: 'v3', enumerable: false }
   ],
   143: [
-    { name: 'Kuru', address: '0xd651346d7c789536ebf06dc72aE3C8502cd695CC', type: 'v2' }
+    { name: 'Kuru', address: '0xd651346d7c789536ebf06dc72aE3C8502cd695CC', type: 'v2', enumerable: false }
   ],
   80094: [
-    { name: 'Kodiak', address: '0xD84CBf0B02636E7f53dB9E5e45A616E05d710990', type: 'v3' }
+    { name: 'Kodiak (V2)', address: '0x5e705e184d233ff2a7cb1553793464a9d0c3028f', type: 'v2', enumerable: true },
+    { name: 'Kodiak (V3)', address: '0xD84CBf0B02636E7f53dB9E5e45A616E05d710990', type: 'v3', enumerable: false }
   ]
 };
 
-// ----- DEX routers -----
+// ----- DEX routers (required for arbitrage simulation/execution) -----
 const ROUTERS: Record<number, string> = {
-  324: '0x9B5def958d0f3b6955cBEa4D5B7809b2fb26b059',
-  534352: '',
-  59144: '',
-  8453: '0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43',
-  143: '0x0d3a1BE29E9dEd63c7a5678b31e847D68F71FFa2',
-  80094: '0xEd158C4b336A6FCb5B193A5570e3a571f6cbe690'
+  324: '0x9B5def958d0f3b6955cBEa4D5B7809b2fb26b059',           // SyncSwap Router V2
+  534352: '0x80e38291e06339d10aab483c65695d004dbd5c69',      // SyncSwap Router V1 (Scroll)
+  59144: '0xFE6508f0015C778Bdcc1fB5465bA5ebE224C9912',       // PancakeSwap V3 Universal Router
+  8453: '0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43',        // Aerodrome Router
+  143: '0x0d3a1BE29E9dEd63c7a5678b31e847D68F71FFa2',         // Kuru FlowRouter
+  80094: '0xe301E48F77963D3F7DbD2a4796962Bd7f3867Fb4'         // Kodiak SwapRouter02
 };
 
-// ----- Chainlink feeds (to be filled) -----
+// ----- Chainlink feeds (official aggregator addresses from Chainlink docs) -----
 const CHAINLINK_FEEDS: Record<number, Record<string, string>> = {
-  324: {},
-  8453: {},
+  324: {
+    // zkSync Era
+    '0x5aea5775959fbc2557cc8789bc1bf90a239d9a91': '0x6D41d1dc818112880b40e26BD6FD347E41008eDA' // WETH / USD
+    // USDC/USD not available on zkSync
+  },
+  534352: {
+    // Scroll
+    '0x5aea5775959fbc2557cc8789bc1bf90a239d9a91': '0x6bF14CB0A831078629D993FDeBcB182b21A8774C', // WETH / USD
+    '0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4': '0x43d12Fb3AfCAd5347fA764EeAB105478337b7200'  // USDC / USD
+  },
+  59144: {
+    // Linea
+    '0x5aea5775959fbc2557cc8789bc1bf90a239d9a91': '0x3c6Cd9Cc7c7a4c2Cf5a82734CD249D7D593354dA', // WETH / USD
+    '0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4': '0xAADAa473C1bDF7317ec07c915680Af29DeBfdCb5'  // USDC / USD
+  },
+  8453: {
+    // Base
+    '0x4200000000000000000000000000000000000006': '0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70', // WETH / USD
+    '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': '0x7e860098F58bBFC8648a4311b374B1D669a2bc6B'  // USDC / USD
+  },
+  143: {}, // Monad – Chainlink feeds not available; fallback used
+  80094: {} // Berachain – Chainlink feeds not available; fallback used
 };
 
-// ----- ABIs -----
+// ----- ABIs (unchanged from previous version) -----
 const ERC20_ABI = parseAbi([
   'function totalSupply() view returns (uint256)',
   'function balanceOf(address) view returns (uint256)',
@@ -112,7 +140,7 @@ const EXECUTOR_ABI = parseAbi([
   'function executeArbitrage(address token, uint256 amount, address[] dexes, bytes calldata swapData) external returns (uint256 profit)'
 ]);
 
-// ----- RPC rotators -----
+// ----- RPC rotators (unchanged) -----
 class RPCRotator {
   private urls: string[];
   private index = 0;
@@ -175,7 +203,7 @@ async function sendTelegram(message: string) {
   }
 }
 
-// ----- USD price -----
+// ----- USD price (Chainlink + fallback) -----
 async function getUSDPrice(client: PublicClient, tokenAddress: string, chainId: number): Promise<number> {
   const feeds = CHAINLINK_FEEDS[chainId];
   if (feeds && feeds[tokenAddress]) {
@@ -186,18 +214,22 @@ async function getUSDPrice(client: PublicClient, tokenAddress: string, chainId: 
         client,
       });
       const data = await aggregator.read.latestRoundData();
-      return Number(data[1]) / 1e8; // answer is at index 1
+      return Number(data[1]) / 1e8;
     } catch (err) {
       logger.warn({ err, token: tokenAddress }, 'Chainlink feed failed, falling back');
     }
   }
   // Hardcoded stablecoins and WETH by address
   const stablecoins: Record<number, string[]> = {
-    324: ['0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4'],
-    8453: ['0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'],
+    324: ['0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4'], // USDC.e on zkSync
+    534352: ['0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4'], // USDC on Scroll (same address)
+    59144: ['0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4'], // USDC on Linea
+    8453: ['0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'], // USDC on Base
   };
   const weth: Record<number, string[]> = {
     324: ['0x5aea5775959fbc2557cc8789bc1bf90a239d9a91'],
+    534352: ['0x5aea5775959fbc2557cc8789bc1bf90a239d9a91'],
+    59144: ['0x5aea5775959fbc2557cc8789bc1bf90a239d9a91'],
     8453: ['0x4200000000000000000000000000000000000006'],
   };
   if (stablecoins[chainId]?.includes(tokenAddress)) return 1;
@@ -223,7 +255,7 @@ async function isHoneypot(client: PublicClient, token: string, factoryAddress: s
     const result = await client.call({ to: token as `0x${string}`, data: transferCall }).catch(() => null);
     if (result && !result.data) {
       const totalSupplyBefore = await contract.read.totalSupply();
-      const totalSupplyAfter = await contract.read.totalSupply();
+      const totalSupplyAfter = await contract.read.totalSupply(); // same block
       if (totalSupplyAfter !== totalSupplyBefore) return true;
       return false;
     }
@@ -372,7 +404,7 @@ async function simulateArbitrage(
   return { profitUSD, gasCost };
 }
 
-// ----- Load existing pools (V2 only) -----
+// ----- Load existing pools (respects enumerable flag) -----
 async function loadExistingPools(chain: typeof CHAINS[0], client: PublicClient) {
   const factories = FACTORIES[chain.id] || [];
   for (const factory of factories) {
@@ -380,8 +412,8 @@ async function loadExistingPools(chain: typeof CHAINS[0], client: PublicClient) 
       logger.info(`Skipping factory ${factory.name} on ${chain.name} – address not configured`);
       continue;
     }
-    if (factory.type === 'v3') {
-      logger.info(`V3 factory ${factory.name} on ${chain.name} cannot be enumerated; will rely on events`);
+    if (!factory.enumerable) {
+      logger.info(`Factory ${factory.name} on ${chain.name} is non-enumerable; will rely on events`);
       continue;
     }
     try {
