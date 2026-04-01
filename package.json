@@ -10,7 +10,7 @@
     "dev": "ts-node index.ts"
   },
   "dependencies": {
-    "@bgd-labs/aave-address-book": "^4.48.0",
+    "@bgd-labs/aave-address-book": "^4.44.22",
     "axios": "^1.7.7",
     "dotenv": "^16.4.5",
     "pg": "^8.13.0",
