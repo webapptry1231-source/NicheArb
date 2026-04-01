@@ -1,7 +1,7 @@
-import { createPublicClient, createWalletClient, http, webSocket, encodeFunctionData, getContract, PublicClient, WalletClient, parseAbi, defineChain } from 'viem';
+import { createPublicClient, createWalletClient, http, webSocket, encodeFunctionData, getContract, PublicClient, WalletClient, parseAbi, defineChain, Log } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { zksync, scroll, linea, base } from 'viem/chains';
-import { AaveV3ZkSync, AaveV3Scroll, AaveV3Linea, AaveV3Base } from '@bgd-labs/aave-address-book';
+import { AaveV3ZkSync, AaveV3Scroll, AaveV3Base } from '@bgd-labs/aave-address-book';
 import { Pool } from 'pg';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -31,11 +31,12 @@ const berachain = defineChain({
   rpcUrls: { default: { http: ['https://rpc.berachain.com'] }, public: { http: ['https://rpc.berachain.com'] } }
 });
 
-// ----- Chain configuration -----
+// ----- Chain configuration (use manual pool address for Linea since address-book doesn't export it) -----
+// Linea Aave V3 pool: 0xc47b8c00b0f69a36fa203ffeac0334874574a8ac
 const CHAINS = [
   { id: 324, name: 'zksync', viemChain: zksync, aavePool: AaveV3ZkSync.POOL, executor: process.env.EXECUTOR_ZKSYNC! },
   { id: 534352, name: 'scroll', viemChain: scroll, aavePool: AaveV3Scroll.POOL, executor: process.env.EXECUTOR_SCROLL! },
-  { id: 59144, name: 'linea', viemChain: linea, aavePool: AaveV3Linea.POOL, executor: process.env.EXECUTOR_LINEA! },
+  { id: 59144, name: 'linea', viemChain: linea, aavePool: '0xc47b8c00b0f69a36fa203ffeac0334874574a8ac', executor: process.env.EXECUTOR_LINEA! },
   { id: 8453, name: 'base', viemChain: base, aavePool: AaveV3Base.POOL, executor: process.env.EXECUTOR_BASE! },
   { id: 143, name: 'monad', viemChain: monad, aavePool: undefined, executor: process.env.EXECUTOR_MONAD! },
   { id: 80094, name: 'berachain', viemChain: berachain, aavePool: undefined, executor: process.env.EXECUTOR_BERACHAIN! }
@@ -104,7 +105,7 @@ const FACTORY_V2_ABI = parseAbi([
   'function allPairs(uint256) view returns (address)'
 ]);
 
-// Correct Aave V3 reserve data struct (matching the official Aave V3)
+// Correct Aave V3 reserve data struct (named)
 const AAVE_POOL_ABI = parseAbi([
   'function getReserveData(address asset) view returns ((uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt))'
 ]);
@@ -160,7 +161,7 @@ class WSRotator {
 
 // ----- Database -----
 const pg = new Pool({ connectionString: process.env.DATABASE_URL });
-pg.on('error', (err) => logger.error({ err }, 'Postgres error'));
+pg.on('error', (err: Error) => logger.error({ err }, 'Postgres error'));
 
 // ----- Telegram -----
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
@@ -187,7 +188,7 @@ async function getUSDPrice(client: PublicClient, tokenAddress: string, chainId: 
         client,
       });
       const data = await aggregator.read.latestRoundData();
-      return Number(data.answer) / 1e8;
+      return Number(data[1]) / 1e8; // answer is at index 1
     } catch (err) {
       logger.warn({ err, token: tokenAddress }, 'Chainlink feed failed, falling back');
     }
@@ -465,11 +466,12 @@ async function setupPoolListeners(chain: typeof CHAINS[0], wsClient: PublicClien
       address: factory.address as `0x${string}`,
       abi: [eventAbi],
       eventName: factory.type === 'v2' ? 'PairCreated' : 'PoolCreated',
-      onLogs: async (logs) => {
+      onLogs: async (logs: Log[]) => {
         for (const log of logs) {
-          const pool = log.args.pool as string;
-          const token0 = log.args.token0 as string;
-          const token1 = log.args.token1 as string;
+          const pool = (log.args as any).pool as string;
+          const token0 = (log.args as any).token0 as string;
+          const token1 = (log.args as any).token1 as string;
+          if (!pool || !token0 || !token1) continue;
           logger.info({ chain: chain.name, pool }, 'New pool discovered');
           const client = rpcManager.getClient();
           let tvl = 0;
@@ -492,7 +494,6 @@ async function setupPoolListeners(chain: typeof CHAINS[0], wsClient: PublicClien
             decimals1 = await getTokenDecimals(client, token1);
             price0 = await getUSDPrice(client, token0, chain.id);
             price1 = await getUSDPrice(client, token1, chain.id);
-            // Rough TVL: price * liquidity (we don't have liquidity easily, so we'll skip TVL filter for V3)
             tvl = 1000; // assume enough to pass filter
           }
           if (tvl < 800) continue;
@@ -533,9 +534,9 @@ async function scanChain(chain: typeof CHAINS[0], rpcManager: RPCRotator, wsClie
     const reserveData0 = await aaveContract.read.getReserveData([pool.token0 as `0x${string}`]).catch(() => null);
     const reserveData1 = await aaveContract.read.getReserveData([pool.token1 as `0x${string}`]).catch(() => null);
     if (!reserveData0 || !reserveData1) continue;
-    // aToken address is at index 8 in the struct (0‑based: configuration, liquidityIndex, currentLiquidityRate, variableBorrowIndex, currentVariableBorrowRate, currentStableBorrowRate, lastUpdateTimestamp, id, aTokenAddress)
-    const aToken0 = reserveData0[8];
-    const aToken1 = reserveData1[8];
+    // aToken address is the 9th field (index 8) in the struct
+    const aToken0 = (reserveData0 as any).aTokenAddress as string;
+    const aToken1 = (reserveData1 as any).aTokenAddress as string;
     const erc20 = getContract({ address: pool.token0 as `0x${string}`, abi: ERC20_ABI, client: rpcManager.getClient() });
     const available0 = await erc20.read.balanceOf([aToken0 as `0x${string}`]).catch(() => 0n);
     const available1 = await erc20.read.balanceOf([aToken1 as `0x${string}`]).catch(() => 0n);
