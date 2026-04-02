@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "echo 'Bypassing strict check...'",
-    "start": "node migrate.ts"
+    "start": "npx tsx index.ts"
   },
   "dependencies": {
     "viem": "^2.21.0",
