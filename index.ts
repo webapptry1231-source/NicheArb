@@ -70,7 +70,7 @@ const HTTP_RPCS = [
   'https://linea.drpc.org',
 ];
 const WS_RPCS = [
-  'wss://linea.blockpi.network/v1/rpc/public',
+  'wss://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',
 ];
 
 // ============================================================
