@@ -496,6 +496,9 @@ async function scanChain(chain: typeof CHAINS[0], rpcManager: RPCRotator, wsClie
       if (sim.profitUSD > threshold && sim.profitUSD > Number(sim.gasCost) * 3 / 1e18) {
         logger.info({ chain: chain.name, profitUSD: sim.profitUSD, opp: opp!.steps }, 'Opportunity found');
         await sendTelegram(`🎯 Opportunity on ${chain.name}: $${sim.profitUSD.toFixed(2)} profit`);
+        // --- EXECUTION DISABLED FOR DRY-RUN ---
+        // Uncomment the following block only when a real receiver contract is deployed.
+        /*
         if (chain.executor && chain.executor !== '0x0' && chain.executor !== '') {
           const walletClient = createWalletClient({
             account: privateKeyToAccount(`0x${process.env.EXECUTOR_PRIVATE_KEY}`),
@@ -505,7 +508,7 @@ async function scanChain(chain: typeof CHAINS[0], rpcManager: RPCRotator, wsClie
           const swapData = encodeFunctionData({
             abi: parseAbi(['function swap(address[] dexes, address[] tokens, uint256[] amounts)']),
             functionName: 'swap',
-            args: [opp!.steps.map(s => s.pool as Address), opp!.steps.map(s => s.fromToken as Address), [opp!.steps[0].fromToken === opp!.steps[0].fromToken ? amount0 : amount1, 0n]]
+            args: [opp!.steps.map(s => s.pool as Address), opp!.steps.map(s => s.fromToken as Address), [opp!.steps[0].fromToken === pool.token0 ? amount0 : amount1, 0n]]
           });
           const tx = await walletClient.sendTransaction({
             to: chain.executor as Address,
@@ -524,15 +527,17 @@ async function scanChain(chain: typeof CHAINS[0], rpcManager: RPCRotator, wsClie
           logger.info('Execution skipped – no executor address configured');
           dailyProfit += sim.profitUSD;
         }
+        */
+        // For dry-run, just accumulate simulated profit:
+        dailyProfit += sim.profitUSD;
       }
     }
   }
-  // Refresh TVL every 10 blocks
+  // Refresh TVL every 10 blocks (simplified)
   const cnt = (blockCounter.get(chain.id) || 0) + 1;
   blockCounter.set(chain.id, cnt);
   if (cnt % 10 === 0) {
     for (const pool of pools) {
-      // simplified: just update last_tvl_update timestamp; real update would need reserves fetch
       await pg.query('UPDATE active_pools SET last_tvl_update = $1 WHERE pool_address = $2', [Date.now(), pool.pool_address]);
     }
   }
@@ -581,11 +586,18 @@ async function main() {
     const wsClient = await wsRotators[chain.id].getClient();
     await setupPoolListeners(chain, wsClient, rpcManagers[chain.id]);
   }
-  for (const chain of CHAINS) {
-    if (!wsRotators[chain.id]) continue;
-    const wsClient = await wsRotators[chain.id].getClient();
-    wsClient.watchBlocks({ onBlock: async () => { await scanChain(chain, rpcManagers[chain.id], wsClient); } });
+
+  // --- DRY-RUN: Only zkSync, no execution ---
+  const dryRunChain = CHAINS.find(c => c.name === 'zksync');
+  if (dryRunChain && wsRotators[dryRunChain.id]) {
+    const wsClient = await wsRotators[dryRunChain.id].getClient();
+    wsClient.watchBlocks({ onBlock: async () => { await scanChain(dryRunChain, rpcManagers[dryRunChain.id], wsClient); } });
+    logger.info('Dry-run mode: only zkSync, no actual transactions will be sent.');
+  } else {
+    logger.error('zkSync not configured, cannot run dry-run');
+    return;
   }
+
   // Health checks every minute
   setInterval(() => {
     Object.values(rpcManagers).forEach(m => m.healthCheck());
@@ -606,7 +618,7 @@ async function main() {
     logger.info(msg);
     await sendTelegram(msg);
   }, 300000);
-  logger.info('Scanner started');
+  logger.info('Scanner started in dry-run mode (zkSync only, no execution).');
 }
 
 main().catch(err => { logger.error({ err }, 'Fatal error'); process.exit(1); });
