@@ -631,7 +631,17 @@ async function loadExistingPools(client: PublicClient, chainId: number) {
             if (tvl === 0) tvl = 1;
             return { pool: pool as string, token0, token1, tvl, type: 'v2' };
           }));
-          for (const data of poolData.filter(d => d && !(await isHoneypot(client, d.token0, factory.address) || await isHoneypot(client, d.token1, factory.address)))) {
+          
+          // FIXED BLOCK: replaced .filter(await ...) with explicit async loop
+          for (const data of poolData) {
+            if (!data) continue;
+
+            const isBad =
+              (await isHoneypot(client, data.token0, factory.address)) ||
+              (await isHoneypot(client, data.token1, factory.address));
+
+            if (isBad) continue;
+
             if (data.tvl >= 50) {
               await pg.query(
                 `INSERT INTO active_pools (chain_id, pool_address, token0, token1, factory, tvl_usd, type, last_scanned_block, cooldown_until, last_tvl_update)
