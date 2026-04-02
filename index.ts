@@ -210,10 +210,23 @@ pg.on('error', (err: Error) => logger.error({ err }, 'Postgres error'));
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID!;
-async function sendTelegram(message: string) {
-  try {
-    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: TELEGRAM_CHAT_ID, text: message });
-  } catch (err) { logger.error({ err }, 'Telegram send failed'); }
+async function sendTelegram(message: string, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await axios.post(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+        { chat_id: TELEGRAM_CHAT_ID, text: message },
+        { timeout: 15000 }
+      );
+      return;
+    } catch (err) {
+      if (i === retries - 1) {
+        logger.error({ err }, 'Telegram send failed');
+      } else {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
 }
 
 // ============================================================
