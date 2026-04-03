@@ -139,6 +139,8 @@ const SWAP_EXACT_TOKENS_FOR_TOKENS_ABI = parseAbi([
 // ============================================================
 // 6. RPC Rotator with health checks & rate limiter
 // ============================================================
+let globalLastSeedStart = 0; // For seeding phase detection
+
 class RPCRotator {
   private urls: string[];
   private index = 0;
@@ -153,8 +155,10 @@ class RPCRotator {
       this.lastReset = now;
     }
     this.callCount++;
-    if (this.callCount > 25) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    // During seeding (first 5 minutes after globalLastSeedStart), allow 80 calls/min
+    const limit = (globalLastSeedStart && (Date.now() - globalLastSeedStart < 300000)) ? 80 : 25;
+    if (this.callCount > limit) {
+      await new Promise(resolve => setTimeout(resolve, 800));
       this.callCount = 0;
     }
   }
@@ -428,7 +432,7 @@ async function precomputeRoutes(client: PublicClient, chainId: number) {
       }
     }
     routes.sort((a, b) => Number(b.estimatedProfitWei - a.estimatedProfitWei));
-    const topRoutes = routes.slice(0, 5);
+    const topRoutes = routes.slice(0, 10);  // Increased from 5 to 10 for more candidates
     await pg.query('DELETE FROM arb_routes WHERE borrow_token = $1', [borrowTokenLower]);
     for (const route of topRoutes) {
       await pg.query(
@@ -619,6 +623,7 @@ async function seedV2Pools(client: PublicClient, chainId: number) {
         try {
           const pool = await factoryContract.read.getPair([tokenA, tokenB]);
           if (pool && pool !== '0x0000000000000000000000000000000000000000') {
+            logger.info({ factory: factory.name, tokenA, tokenB, pool: pool.toLowerCase() }, 'V2 pool found');
             // Honeypot check
             const isBad = (await isHoneypot(client, tokenA, factory.address)) || (await isHoneypot(client, tokenB, factory.address));
             if (isBad) continue;
@@ -660,6 +665,7 @@ async function seedV3Pools(client: PublicClient, chainId: number) {
           try {
             const pool = await factoryContract.read.getPool([tokenA, tokenB, fee]);
             if (pool && pool !== '0x0000000000000000000000000000000000000000') {
+              logger.info({ factory: factory.name, fee, tokenA, tokenB, pool: pool.toLowerCase() }, 'V3 pool found');
               // Honeypot check
               const isBad = (await isHoneypot(client, tokenA, factory.address)) || (await isHoneypot(client, tokenB, factory.address));
               if (isBad) continue;
@@ -679,6 +685,7 @@ async function seedV3Pools(client: PublicClient, chainId: number) {
 }
 
 async function loadExistingPools(client: PublicClient, chainId: number) {
+  globalLastSeedStart = Date.now(); // Mark seeding start for rate limit boost
   await globalRpcManager.rateLimit();
   await seedV2Pools(client, chainId);
   for (const factory of FACTORIES) {
@@ -708,6 +715,7 @@ async function loadExistingPools(client: PublicClient, chainId: number) {
             const isBad = (await isHoneypot(client, data.token0, factory.address)) || (await isHoneypot(client, data.token1, factory.address));
             if (isBad) continue;
             if (data.tvl >= 30) {
+              logger.info({ factory: factory.name, pool: data.pool.toLowerCase() }, 'Enumerable V2 pool inserted');
               await pg.query(
                 `INSERT INTO active_pools (chain_id, pool_address, token0, token1, factory, tvl_usd, type, last_scanned_block, cooldown_until, last_tvl_update)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING`,
@@ -720,13 +728,18 @@ async function loadExistingPools(client: PublicClient, chainId: number) {
     }
   }
   await seedV3Pools(client, chainId);
+  const poolCountRes = await pg.query('SELECT COUNT(*) as count FROM active_pools WHERE chain_id = $1', [chainId]);
+  logger.info({ totalPools: poolCountRes.rows[0].count }, 'Total active pools in DB');
+  globalLastSeedStart = 0; // Reset seeding flag
 }
 
 async function refreshPools(client: PublicClient, chainId: number) {
+  globalLastSeedStart = Date.now(); // Mark seeding start for rate limit boost
   logger.info('Refreshing pools and routes...');
   await loadExistingPools(client, chainId);
   await new Promise(resolve => setTimeout(resolve, 5000));
   await precomputeRoutes(client, chainId);
+  globalLastSeedStart = 0; // Reset seeding flag
 }
 
 // ============================================================
