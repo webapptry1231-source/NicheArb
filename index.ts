@@ -61,28 +61,31 @@ const EXTRA_TOKENS: Address[] = [
 const ALL_CANDIDATE_TOKENS = [...AAVE_BORROWABLE_ASSETS, ...EXTRA_TOKENS];
 
 // ============================================================
-// 4. RPC ENDPOINTS (updated with fastest & most reliable)
+// 4. RPC ENDPOINTS (fixed + stable signed-up first)
 // ============================================================
 const HTTP_RPCS = [
-  'https://site1.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729',
-  'https://site2.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729',
-  'https://go.getblock.io/da7843f8f78441fd80522776af221ab8/graphql',
-  'https://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',
-  'https://rpc.sentio.xyz/linea',           // Sentio – fastest public (~0.127s)
-  'https://rpc.linea.build',                // Official Linea (very reliable)
-  'https://1rpc.io/linea',                  // 1RPC – excellent speed & privacy
-  'https://linea-rpc.publicnode.com',       // PublicNode – “fastest, free-est, privacy-first”
-  'https://linea.drpc.org',                 // dRPC (already in your code – solid)
-  'https://rpc.ankr.com/linea',             // Ankr (already in your code – good fallback)
-  'https://linea.api.pocket.network',       // Pocket Network – decentralized & resilient
+  // === FREE WITH SIGN-UP (highest priority - most stable) ===
+  'https://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',           // ← Alchemy (best)
+  'https://go.getblock.io/da7843f8f78441fd80522776af221ab8',                       // ← FIXED: NO /graphql
+  'https://site2.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729', // ← Your Moralis (already good)
+
+  // === Fast public fallbacks ===
+  'https://rpc.sentio.xyz/linea',
+  'https://rpc.linea.build',
+  'https://1rpc.io/linea',
+  'https://linea-rpc.publicnode.com',
+  'https://linea.drpc.org',
+  'https://rpc.ankr.com/linea',
+  'https://linea.api.pocket.network',
 ];
 
 const WS_RPCS = [
-  'wss://go.getblock.io/ed808f37234349d29ca35a3913e9bcbb',
-  'wss://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',
-  'wss://linea-rpc.publicnode.com',         // PublicNode – best free WS right now
-  'wss://rpc.linea.build',                  // Official (works but can be rate-limited)
-  'wss://linea.blockpi.network/v1/rpc/public',  // Backup
+  // === FREE WITH SIGN-UP WSS ===
+  'wss://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',            // ← Alchemy WSS
+
+  // === Public WSS (more reliable ones kept) ===
+  'wss://linea-rpc.publicnode.com',
+  'wss://rpc.linea.build',
 ];
 
 // ============================================================
