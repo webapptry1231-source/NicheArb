@@ -64,10 +64,10 @@ const ALL_CANDIDATE_TOKENS = [...AAVE_BORROWABLE_ASSETS, ...EXTRA_TOKENS];
 // 4. RPC ENDPOINTS (updated with fastest & most reliable)
 // ============================================================
 const HTTP_RPCS = [
-  'https://site1.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729'
-  'https://site2.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729'
-  'https://go.getblock.io/da7843f8f78441fd80522776af221ab8/graphql'
-  'https://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs'
+  'https://site1.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729',
+  'https://site2.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729',
+  'https://go.getblock.io/da7843f8f78441fd80522776af221ab8/graphql',
+  'https://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',
   'https://rpc.sentio.xyz/linea',           // Sentio – fastest public (~0.127s)
   'https://rpc.linea.build',                // Official Linea (very reliable)
   'https://1rpc.io/linea',                  // 1RPC – excellent speed & privacy
@@ -78,8 +78,8 @@ const HTTP_RPCS = [
 ];
 
 const WS_RPCS = [
-  'wss://go.getblock.io/ed808f37234349d29ca35a3913e9bcbb'
-  'wss://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs'
+  'wss://go.getblock.io/ed808f37234349d29ca35a3913e9bcbb',
+  'wss://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',
   'wss://linea-rpc.publicnode.com',         // PublicNode – best free WS right now
   'wss://rpc.linea.build',                  // Official (works but can be rate-limited)
   'wss://linea.blockpi.network/v1/rpc/public',  // Backup
