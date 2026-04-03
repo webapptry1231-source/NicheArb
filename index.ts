@@ -66,7 +66,7 @@ const ALL_CANDIDATE_TOKENS = [...AAVE_BORROWABLE_ASSETS, ...EXTRA_TOKENS];
 const HTTP_RPCS = [
   // === FREE WITH SIGN-UP (highest priority - most stable) ===
   'https://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',           // ← Alchemy (best)
-  'https://go.getblock.io/da7843f8f78441fd80522776af221ab8',                       // ← FIXED: NO /graphql
+  'https://go.getblock.io/c5de5c35f0ff4876b3b71795bca84379',                       // ← FIXED: NO /graphql
   'https://site2.moralis-nodes.com/linea/116c8c41a356462a89874466367cb729', // ← Your Moralis (already good)
 
   // === Fast public fallbacks ===
