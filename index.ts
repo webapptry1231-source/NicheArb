@@ -54,9 +54,9 @@ const AAVE_BORROWABLE_ASSETS: Address[] = [
   '0xB5beDd42000b71FddE22D3eE8a79Bd49A568fC8F', // wstETH
 ];
 
-// Add any extra tokens here (e.g., USDC.e, DAI, etc.) to increase detection
+// Added high-liquidity tokens (ezETH is a top AAVE asset on Linea)
 const EXTRA_TOKENS: Address[] = [
-  // Example: '0x...' – add real token addresses if you have them
+  '0x2416092f143378750bb29b79ed961ab195cceea5', // ezETH (Renzo)
 ];
 
 const ALL_CANDIDATE_TOKENS = [...AAVE_BORROWABLE_ASSETS, ...EXTRA_TOKENS];
@@ -70,7 +70,7 @@ const HTTP_RPCS = [
   'https://linea.drpc.org',
 ];
 const WS_RPCS = [
-  'wss://linea-mainnet.g.alchemy.com/v2/iEikaO2uqERzi7hrxxEVs',
+  'wss://linea.blockpi.network/v1/rpc/public',
 ];
 
 // ============================================================
@@ -96,11 +96,17 @@ const UNIV3_POOL_ABI = parseAbi([
   'function token0() view returns (address)',
   'function token1() view returns (address)',
   'function liquidity() view returns (uint128)',
+  'function fee() view returns (uint24)',
 ]);
 
 const FACTORY_V2_ABI = parseAbi([
   'function allPairsLength() view returns (uint256)',
   'function allPairs(uint256) view returns (address)',
+]);
+
+// Extended ABI for V2 factories that support getPair
+const V2_FACTORY_WITH_GETPAIR_ABI = parseAbi([
+  'function getPair(address, address) view returns (address)',
 ]);
 
 const UNISWAP_V3_FACTORY_ABI = parseAbi([
@@ -210,23 +216,10 @@ pg.on('error', (err: Error) => logger.error({ err }, 'Postgres error'));
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID!;
-async function sendTelegram(message: string, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-        { chat_id: TELEGRAM_CHAT_ID, text: message },
-        { timeout: 15000 }
-      );
-      return;
-    } catch (err) {
-      if (i === retries - 1) {
-        logger.error({ err }, 'Telegram send failed');
-      } else {
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    }
-  }
+async function sendTelegram(message: string) {
+  try {
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: TELEGRAM_CHAT_ID, text: message });
+  } catch (err) { logger.error({ err }, 'Telegram send failed'); }
 }
 
 // ============================================================
@@ -286,6 +279,7 @@ async function getUSDPrice(client: PublicClient, tokenAddress: string): Promise<
     '0xe5D7c2a44FfDDf6b295A15c148167daaAf5Cf34f': '0x3c6Cd9Cc7c7a4c2Cf5a82734CD249D7D593354dA',
     '0x176211869cA2b568f2A7D4EE941E073a821EE1ff': '0xAADAa473C1bDF7317ec07c915680Af29DeBfdCb5',
     '0xA219439258ca9da29E9Cc4cE5596924745e12B93': '0xefCA2bbe0EdD0E22b2e0d2F8248E99F4bEf4A7dB',
+    // ezETH doesn't have a direct Chainlink feed on Linea; fallback to WETH price
   };
   if (chainlinkFeeds[tokenAddress]) {
     try {
@@ -299,6 +293,8 @@ async function getUSDPrice(client: PublicClient, tokenAddress: string): Promise<
   if (stableAddrs.includes(tokenAddress.toLowerCase())) return 1;
   // WETH
   if (tokenAddress.toLowerCase() === '0xe5d7c2a44fffdf6b295a15c148167daaaf5cf34f'.toLowerCase()) return await getEthPriceUSD(client);
+  // ezETH: price ~ WETH (1:1 for simulation)
+  if (tokenAddress.toLowerCase() === '0x2416092f143378750bb29b79ed961ab195cceea5'.toLowerCase()) return await getEthPriceUSD(client);
   return 0;
 }
 
@@ -328,7 +324,7 @@ async function getV3PoolTVL(client: PublicClient, pool: string): Promise<number>
 // ============================================================
 // 10. Core Math: getAmountOut (V2 & improved V3)
 // ============================================================
-async function getAmountOut(client: PublicClient, pool: string, type: 'v2' | 'v3', tokenIn: string, amountIn: bigint): Promise<bigint> {
+async function getAmountOut(client: PublicClient, pool: string, type: 'v2' | 'v3', tokenIn: string, amountIn: bigint, feeTier?: number): Promise<bigint> {
   await globalRpcManager.rateLimit();
   if (type === 'v2') {
     const reserves = await client.readContract({ address: pool as Address, abi: PAIR_ABI, functionName: 'getReserves' }).catch(() => null);
@@ -342,6 +338,7 @@ async function getAmountOut(client: PublicClient, pool: string, type: 'v2' | 'v3
     const denominator = reserveIn * 1000n + amountInWithFee;
     return numerator / denominator;
   } else {
+    // V3: use actual fee tier and proper sqrtPrice math
     const poolContract = getContract({ address: pool as Address, abi: UNIV3_POOL_ABI, client });
     const [slot0Data, token0Addr] = await Promise.all([
       poolContract.read.slot0().catch(() => null),
@@ -349,12 +346,20 @@ async function getAmountOut(client: PublicClient, pool: string, type: 'v2' | 'v3
     ]);
     if (!slot0Data) return 0n;
     const sqrtPriceX96 = BigInt(slot0Data[0]);
-    const isToken0 = token0Addr.toLowerCase() === tokenIn.toLowerCase();
-    const fee = 997n; // 0.3%
-    const price = (sqrtPriceX96 * sqrtPriceX96) / (2n ** 192n);
-    let amountOut = isToken0
-      ? (amountIn * price * fee) / 1000n
-      : (amountIn * (2n ** 192n) * fee) / (sqrtPriceX96 * sqrtPriceX96 * 1000n);
+    const isToken0In = token0Addr.toLowerCase() === tokenIn.toLowerCase();
+    // Use provided fee tier (from factory config) or default to 3000 (0.3%)
+    const fee = BigInt(feeTier || 3000);
+    const numerator = amountIn * (10000n - fee);
+    let amountOut: bigint;
+    if (isToken0In) {
+      // tokenIn is token0: amountOut = amountIn * (1 - fee) * (sqrtPriceX96^2 / 2^192)
+      const price = (sqrtPriceX96 * sqrtPriceX96) / (2n ** 192n);
+      amountOut = (numerator * price) / 10000n;
+    } else {
+      // tokenIn is token1: amountOut = amountIn * (1 - fee) * (2^192 / sqrtPriceX96^2)
+      const invPrice = (2n ** 192n) / (sqrtPriceX96 * sqrtPriceX96);
+      amountOut = (numerator * invPrice) / 10000n;
+    }
     return amountOut > 0n ? amountOut : 0n;
   }
 }
@@ -362,7 +367,7 @@ async function getAmountOut(client: PublicClient, pool: string, type: 'v2' | 'v3
 // ============================================================
 // 11. Pre‑computed Routes (2‑hop, stored in DB, with cooldown)
 // ============================================================
-interface SwapStep { fromToken: string; toToken: string; pool: string; type: 'v2' | 'v3'; }
+interface SwapStep { fromToken: string; toToken: string; pool: string; type: 'v2' | 'v3'; feeTier?: number; }
 interface PrecomputedRoute {
   borrowToken: string;
   otherToken: string;
@@ -373,7 +378,7 @@ interface PrecomputedRoute {
 
 async function precomputeRoutes(client: PublicClient, chainId: number) {
   await globalRpcManager.rateLimit();
-  const poolsRes = await pg.query('SELECT pool_address, token0, token1, type, tvl_usd FROM active_pools WHERE chain_id = $1', [chainId]);
+  const poolsRes = await pg.query('SELECT pool_address, token0, token1, type, tvl_usd, fee_tier FROM active_pools WHERE chain_id = $1', [chainId]);
   const pools = poolsRes.rows;
   const tokenToPools = new Map<string, typeof pools>();
   for (const p of pools) {
@@ -389,23 +394,24 @@ async function precomputeRoutes(client: PublicClient, chainId: number) {
     const routes: PrecomputedRoute[] = [];
     for (const poolA of candidatePools) {
       const otherToken = (poolA.token0.toLowerCase() === borrowTokenLower) ? poolA.token1 : poolA.token0;
-      const amountOutFirst = await getAmountOut(client, poolA.pool_address, poolA.type, borrowToken, 10n ** 18n);
+      const amountOutFirst = await getAmountOut(client, poolA.pool_address, poolA.type, borrowToken, 10n ** 18n, poolA.fee_tier);
       if (amountOutFirst === 0n) continue;
       const returnPools = tokenToPools.get(otherToken.toLowerCase()) || [];
       for (const poolB of returnPools) {
         if (poolB.pool_address === poolA.pool_address) continue;
         if (poolB.token0.toLowerCase() !== borrowTokenLower && poolB.token1.toLowerCase() !== borrowTokenLower) continue;
-        const amountOutSecond = await getAmountOut(client, poolB.pool_address, poolB.type, otherToken, amountOutFirst);
+        const amountOutSecond = await getAmountOut(client, poolB.pool_address, poolB.type, otherToken, amountOutFirst, poolB.fee_tier);
         if (amountOutSecond === 0n) continue;
         const aaveFee = (10n ** 18n) * 5n / 10000n;
         const profit = amountOutSecond - (10n ** 18n) - aaveFee;
-        if (profit > 0n && (poolA.tvl_usd > 200 && poolB.tvl_usd > 200)) {
+        // Lowered TVL threshold to 50 for better detection
+        if (profit > 0n && (poolA.tvl_usd > 50 && poolB.tvl_usd > 50)) {
           routes.push({
             borrowToken: borrowTokenLower,
             otherToken: otherToken.toLowerCase(),
             steps: [
-              { fromToken: borrowToken, toToken: otherToken, pool: poolA.pool_address, type: poolA.type },
-              { fromToken: otherToken, toToken: borrowToken, pool: poolB.pool_address, type: poolB.type },
+              { fromToken: borrowToken, toToken: otherToken, pool: poolA.pool_address, type: poolA.type, feeTier: poolA.fee_tier },
+              { fromToken: otherToken, toToken: borrowToken, pool: poolB.pool_address, type: poolB.type, feeTier: poolB.fee_tier },
             ],
             estimatedProfitWei: profit,
             lastUpdated: Date.now(),
@@ -448,7 +454,7 @@ async function simulateFlashloan(
   for (const amount of borrowAmounts) {
     let currentAmount = amount;
     for (const step of steps) {
-      const amountOut = await getAmountOut(client, step.pool, step.type, step.fromToken, currentAmount);
+      const amountOut = await getAmountOut(client, step.pool, step.type, step.fromToken, currentAmount, step.feeTier);
       if (amountOut === 0n) break;
       currentAmount = amountOut;
     }
@@ -525,13 +531,15 @@ async function executeFlashloan(route: PrecomputedRoute, borrowAmount: bigint, g
 }
 
 // ============================================================
-// 13. Mempool Monitoring (disabled by default to save RPC)
+// 13. Mempool Monitoring (enabled by default)
 // ============================================================
 async function monitorMempool(wsClient: PublicClient) {
-  if (process.env.ENABLE_MEMPOOL !== 'true') {
-    logger.info('Mempool monitor disabled');
+  // Enabled unless explicitly set to 'false'
+  if (process.env.ENABLE_MEMPOOL === 'false') {
+    logger.info('Mempool monitor disabled by ENV');
     return;
   }
+  logger.info('Mempool monitor enabled');
   setInterval(async () => {
     await globalRpcManager.rateLimit();
     const block = await wsClient.getBlock({ blockTag: 'pending' }).catch(() => null);
@@ -594,6 +602,44 @@ async function getBestRoute(borrowToken: string, otherToken: string): Promise<Pr
 // ============================================================
 // 14. Pool Loading & Listeners (V2 + V3, with TVL update)
 // ============================================================
+async function seedV2Pools(client: PublicClient, chainId: number) {
+  await globalRpcManager.rateLimit();
+  for (const factory of FACTORIES.filter(f => f.type === 'v2')) {
+    const factoryContract = getContract({ address: factory.address, abi: V2_FACTORY_WITH_GETPAIR_ABI, client });
+    for (const tokenA of ALL_CANDIDATE_TOKENS) {
+      for (const tokenB of ALL_CANDIDATE_TOKENS) {
+        if (tokenA === tokenB) continue;
+        try {
+          const pool = await factoryContract.read.getPair([tokenA, tokenB]);
+          if (pool && pool !== '0x0000000000000000000000000000000000000000') {
+            // Compute TVL from reserves
+            const pair = getContract({ address: pool as Address, abi: PAIR_ABI, client });
+            const [token0, token1, reserves] = await Promise.all([
+              pair.read.token0().catch(() => '0x'),
+              pair.read.token1().catch(() => '0x'),
+              pair.read.getReserves().catch(() => null)
+            ]);
+            if (token0 === '0x' || token1 === '0x' || !reserves) continue;
+            const decimals0 = await getTokenDecimals(client, token0);
+            const decimals1 = await getTokenDecimals(client, token1);
+            const price0 = await getUSDPrice(client, token0);
+            const price1 = await getUSDPrice(client, token1);
+            let tvl = 0;
+            if (price0 > 0) tvl += Number(reserves[0]) * price0 / (10 ** decimals0);
+            if (price1 > 0) tvl += Number(reserves[1]) * price1 / (10 ** decimals1);
+            if (tvl === 0) tvl = 1;
+            await pg.query(
+              `INSERT INTO active_pools (chain_id, pool_address, token0, token1, factory, tvl_usd, type, last_scanned_block, cooldown_until, last_tvl_update)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING`,
+              [chainId, pool.toLowerCase(), token0.toLowerCase(), token1.toLowerCase(), factory.address.toLowerCase(), tvl, 'v2', 0, 0, 0]
+            );
+          }
+        } catch (err) { /* ignore */ }
+      }
+    }
+  }
+}
+
 async function seedV3Pools(client: PublicClient, chainId: number) {
   await globalRpcManager.rateLimit();
   for (const factory of FACTORIES.filter(f => f.type === 'v3' && f.address && f.feeTiers)) {
@@ -606,9 +652,9 @@ async function seedV3Pools(client: PublicClient, chainId: number) {
             const pool = await factoryContract.read.getPool([tokenA, tokenB, fee]);
             if (pool && pool !== '0x0000000000000000000000000000000000000000') {
               await pg.query(
-                `INSERT INTO active_pools (chain_id, pool_address, token0, token1, factory, tvl_usd, type, last_scanned_block, cooldown_until, last_tvl_update)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING`,
-                [chainId, pool.toLowerCase(), tokenA.toLowerCase(), tokenB.toLowerCase(), factory.address.toLowerCase(), 1, 'v3', 0, 0, 0]
+                `INSERT INTO active_pools (chain_id, pool_address, token0, token1, factory, tvl_usd, type, fee_tier, last_scanned_block, cooldown_until, last_tvl_update)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING`,
+                [chainId, pool.toLowerCase(), tokenA.toLowerCase(), tokenB.toLowerCase(), factory.address.toLowerCase(), 1, 'v3', fee, 0, 0, 0]
               );
               const tvl = await getV3PoolTVL(client, pool);
               await pg.query(`UPDATE active_pools SET tvl_usd = $1 WHERE pool_address = $2`, [tvl, pool.toLowerCase()]);
@@ -622,6 +668,9 @@ async function seedV3Pools(client: PublicClient, chainId: number) {
 
 async function loadExistingPools(client: PublicClient, chainId: number) {
   await globalRpcManager.rateLimit();
+  // First, seed V2 pools using getPair (all V2 factories)
+  await seedV2Pools(client, chainId);
+  // Then handle enumerable V2 factories (if any) for extra pools
   for (const factory of FACTORIES) {
     if (factory.type === 'v2' && factory.enumerable) {
       try {
@@ -645,16 +694,11 @@ async function loadExistingPools(client: PublicClient, chainId: number) {
             return { pool: pool as string, token0, token1, tvl, type: 'v2' };
           }));
           
-          // FIXED BLOCK: replaced .filter(await ...) with explicit async loop
+          // Fixed: no await inside filter
           for (const data of poolData) {
             if (!data) continue;
-
-            const isBad =
-              (await isHoneypot(client, data.token0, factory.address)) ||
-              (await isHoneypot(client, data.token1, factory.address));
-
+            const isBad = (await isHoneypot(client, data.token0, factory.address)) || (await isHoneypot(client, data.token1, factory.address));
             if (isBad) continue;
-
             if (data.tvl >= 50) {
               await pg.query(
                 `INSERT INTO active_pools (chain_id, pool_address, token0, token1, factory, tvl_usd, type, last_scanned_block, cooldown_until, last_tvl_update)
@@ -710,7 +754,14 @@ async function scanChain(client: PublicClient, wsClient: PublicClient) {
   for (const routeRow of routesRes.rows) {
     if (foundOpportunity) break;
     const borrowToken = routeRow.borrow_token;
-    const borrowAmounts = [10n ** 17n, 5n ** 17n, 10n ** 18n, 5n ** 18n];
+    // Expanded borrow amounts (0.1, 0.5, 1, 5, 10 ETH equivalent)
+    const borrowAmounts = [
+      10n ** 17n,        // 0.1
+      5n ** 17n,         // 0.5
+      10n ** 18n,        // 1
+      5n ** 18n,         // 5
+      10n ** 19n,        // 10
+    ];
     const steps: SwapStep[] = [
       { fromToken: borrowToken, toToken: routeRow.other_token, pool: routeRow.step1_pool, type: routeRow.step1_type },
       { fromToken: routeRow.other_token, toToken: borrowToken, pool: routeRow.step2_pool, type: routeRow.step2_type },
@@ -757,6 +808,7 @@ async function main() {
       factory TEXT,
       tvl_usd DECIMAL,
       type TEXT DEFAULT 'v2',
+      fee_tier INTEGER,
       last_scanned_block INTEGER,
       cooldown_until INTEGER,
       last_tvl_update INTEGER,
@@ -790,6 +842,7 @@ async function main() {
   // Ensure columns exist for older tables (migration)
   await pg.query(`ALTER TABLE arb_routes ADD COLUMN IF NOT EXISTS cooldown_until INTEGER DEFAULT 0`);
   await pg.query(`ALTER TABLE active_pools ADD COLUMN IF NOT EXISTS tvl_usd DECIMAL DEFAULT 1`);
+  await pg.query(`ALTER TABLE active_pools ADD COLUMN IF NOT EXISTS fee_tier INTEGER`);
 
   const rpcManager = new RPCRotator(HTTP_RPCS);
   globalRpcManager = rpcManager;
@@ -800,13 +853,14 @@ async function main() {
   await loadExistingPools(client, CHAIN.id);
   await precomputeRoutes(client, CHAIN.id);
 
+  // Refresh every 15 minutes (was 30)
   setInterval(async () => {
     await refreshPools(client, CHAIN.id);
-  }, 30 * 60 * 1000);
+  }, 15 * 60 * 1000);
 
   wsClient.watchBlocks({ onBlock: async () => { await scanChain(client, wsClient); } });
-  // Mempool monitor disabled by default to save RPC; enable with ENABLE_MEMPOOL=true
-  // await monitorMempool(wsClient);
+  // Mempool monitor enabled by default (set ENABLE_MEMPOOL=false to disable)
+  await monitorMempool(wsClient);
 
   setInterval(() => {
     rpcManager.healthCheck();
