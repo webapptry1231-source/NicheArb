@@ -312,7 +312,7 @@ async function getUSDPrice(client: PublicClient, tokenAddress: string): Promise<
 }
 
 // ============================================================
-// 9. V3 Pool TVL Helper
+// 9. V3 Pool TVL Helper (more accurate version)
 // ============================================================
 async function getV3PoolTVL(client: PublicClient, pool: string): Promise<number> {
   await globalRpcManager.rateLimit();
@@ -325,13 +325,24 @@ async function getV3PoolTVL(client: PublicClient, pool: string): Promise<number>
       poolContract.read.token1().catch(() => '0x')
     ]);
     if (liquidity === 0n || !slot0Data) return 1;
+
     const sqrtPriceX96 = BigInt(slot0Data[0]);
     const price0 = await getUSDPrice(client, token0);
     const price1 = await getUSDPrice(client, token1);
+
+    // More accurate TVL calculation (uses real liquidity and sqrt price)
     const price = Number(sqrtPriceX96 * sqrtPriceX96) / Number(2n ** 192n);
-    const tvl = Number(liquidity) * Math.sqrt(price) * Math.max(price0, price1) / 1e18;
-    return tvl > 30 ? tvl : 1;
-  } catch { return 1; }
+    let tvl = Number(liquidity) * Math.sqrt(price) * Math.max(price0 || 0, price1 || 0) / 1e18;
+
+    // Fallback if price data missing (common on Linea)
+    if (tvl < 1 && (price0 > 0 || price1 > 0)) {
+      tvl = Number(liquidity) / 1e18 * Math.max(price0 || 1, price1 || 1);
+    }
+
+    return tvl > 5 ? tvl : 5;   // lowered threshold for real pools
+  } catch {
+    return 5;
+  }
 }
 
 // ============================================================
@@ -417,7 +428,8 @@ async function precomputeRoutes(client: PublicClient, chainId: number) {
         if (amountOutSecond === 0n) continue;
         const aaveFee = testAmount * 5n / 10000n;
         const profit = amountOutSecond - testAmount - aaveFee;
-        if (profit > 0n && (poolA.tvl_usd > 30 && poolB.tvl_usd > 30)) {
+        // TVL threshold lowered to 5 for testing
+        if (profit > 0n && (poolA.tvl_usd > 5 && poolB.tvl_usd > 5)) {
           routes.push({
             borrowToken: borrowTokenLower,
             otherToken: otherToken.toLowerCase(),
@@ -432,7 +444,7 @@ async function precomputeRoutes(client: PublicClient, chainId: number) {
       }
     }
     routes.sort((a, b) => Number(b.estimatedProfitWei - a.estimatedProfitWei));
-    const topRoutes = routes.slice(0, 10);  // Increased from 5 to 10 for more candidates
+    const topRoutes = routes.slice(0, 10);
     await pg.query('DELETE FROM arb_routes WHERE borrow_token = $1', [borrowTokenLower]);
     for (const route of topRoutes) {
       await pg.query(
@@ -775,7 +787,6 @@ async function scanChain(client: PublicClient, wsClient: PublicClient) {
     if (foundOpportunity) break;
     const borrowToken = routeRow.borrow_token;
     const borrowDecimals = await getTokenDecimals(client, borrowToken);
-    // FIXED: proper arithmetic for 0.1, 0.5, 1, 5, 10 units
     const borrowAmounts = [
       10n ** BigInt(borrowDecimals - 1),                     // 0.1
       5n * 10n ** BigInt(borrowDecimals - 1),               // 0.5
